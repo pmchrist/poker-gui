@@ -1,3 +1,6 @@
 certifi==2020.12.5
+numpy==1.20.1
 pyzmq==20.0.0
+rlcard==0.2.8
+termcolor==1.1.0
 wincertstore==0.2
