@@ -1,78 +1,129 @@
 #
-#   Hello World server in Python
-#   Binds REP socket to tcp://*:5555
-#   Expects b"Hello" from client, replies with b"World"
+#   Binds REP socket to tcp://*:1916 (because 19/16 play)
+#   Server first expects message from client and then answers
 #
 
+# Import dependencies
 import time
 import zmq
+import rlcard
+import random
+import os
+import json
+with open(os.path.join(rlcard.__path__[0], 'games/limitholdem/card2index.json'), 'r') as file:
+    card2index = json.load(file)
 
-gameFlow = [
-"-1|Dealer|50",
-"-1|Player|25|12|67",
-"-1|Enemy|35|10|127",
-"0|Enemy|3|256|78",
-"0|PlayerRequest|0,1,3,4|0.65",
-"0|Player|0.65|28|305",
-"1|Dealer|49|5|10|84",
-"1|PlayerRequest|0,1,3,4,5|0.4",
-"1|Player|0.29|405|105",
-"1|Enemy|4|21|25",
-"2|Dealer|35|17",
-"2|Enemy|2|31|25",
-"2|PlayerRequest|0,3,5|0.8",
-"2|Player|0.5|23|23",
-"3|Dealer|3|33",
-"3|PlayerRequest|0,1,3,4|0.35",
-"3|Player|1.0|29|45",
-"3|Enemy|4|36|45",
-"End|Player"
-]
+# Environment Init
+env = rlcard.make("no-limit-holdem")
+env.reset()
 
-# Some Init
+# Server Init
 context = zmq.Context()
 socket = context.socket(zmq.REP)
-socket.bind("tcp://*:5555")
+socket.bind("tcp://*:1916")
 serverUp = True
+
+# Correct message generator
+def getRequest():
+    global action
+    # Get Stage
+    stage = str(env.game.stage.value)
+    # Get Pot
+    pot = str(int(env.get_state(0)["obs"][52] + env.get_state(0)["obs"][53]))
+    # Get Cards
+    dealer_cards = [card2index[card.get_index()] for card in env.game.public_cards]
+    dealer_cards = str(dealer_cards).strip('[]')
+    # Get Player Chips
+    player_chips = str(env.game.players[0].remained_chips)
+    # Get Player Cards
+    player_cards = [card2index[card.get_index()] for card in env.game.players[0].hand]
+    player_cards = str(player_cards).strip('[]')
+    # Get Enemy Chips
+    enemy_chips = str(env.game.players[1].remained_chips)
+    # Get Enemy Cards
+    enemy_cards = [card2index[card.get_index()] for card in env.game.players[1].hand]
+    enemy_cards = str(enemy_cards).strip('[]')
+    # Get Player Win Chance (not working now)
+    playerWinChance = str(0.0)
+    if env.get_player_id() == 0:
+        # Get Legal Actions
+        legal_actions = [action.value for action in env._get_legal_actions()]
+        # Pass them to Player to choose
+        legal_actions = str(legal_actions).strip('[]')
+        # Creating message ending
+        messageSub = "Player" + '|' + legal_actions
+    if env.get_player_id() == 1:
+        # Get Legal Actions
+        legal_actions = [action.value for action in env._get_legal_actions()]
+        # Choose Random Action
+        action = random.choice(legal_actions)
+        messageSub = "Enemy" + '|' + str(action)
+    # Stage|Pot|DealerCards|PlayerChips|PlayerCards|EnemyChips|EnemyCards|playerWinChance|Player/Enemy|legal_actions/enemy_action
+    message = stage + '|' + pot + '|' + dealer_cards + '|' + player_chips + '|' + player_cards +'|' + enemy_chips + '|' + enemy_cards + '|' + playerWinChance + '|' + messageSub
+    print("Server:", message)
+    # If it was Enemy's turn we should pass action to Environment
+    if env.get_player_id() == 1: env.step(action)
+    return(message)  
+
+gameOver = False
+busy = False
 
 # Server should always answer, it always gets message first
 while serverUp:
-    # Used to parse string list with example game flow
-    messageID = 0
-    gameOver = False
-    messageID = 0
-    while not gameOver:
+   
+    # Busy checker
+    while busy:
+        time.sleep(5)
+    print("-----------------")
+    print("Server: New Game")
+
+    # While Game Exists
+    while not env.is_over():
+        # Block Server
+        busy = True
+
+        # Wait for message, if server got any message it unfreezes
+        print("-----------------")
+        message = (socket.recv()).decode("utf-8")
+        print ("Unity:", message)
+        messageArr = message.split('|')
+
+        # If game Starts, we just generate first message
+        # (We should also set Mode and Difficulty, but currently it is inactive)
+        if messageArr[0] == ("Start"):
+            print("Mpainei sto Start")
+            frame = getRequest()
+            socket.send(bytes(frame, encoding='utf8'))
+
+        #  Default answer of Unity, when it just updates GUI, we just continue
+        if messageArr[0] == ("Gotcha"):
+            print("Mpainei sto Gotcha")
+            frame = getRequest()
+            socket.send(bytes(frame, encoding='utf8'))
         
-        # Wait for message
-        # If server got any message it unfreezes,
-        # in reality we should check message,
-        # do something with information and then unfreeze
-        # not just print it, at this point first message have some information others are just "Gotcha"
-        message = socket.recv()
-        print (message)
-
-        # If player exited game before legit end
-        if message == (b"Abort"):
-            gameOver = True
-            socket.send(b"Bye")
-
-        #  Default answer of Unity, when it just updates gui
-        if message == (b"Gotcha"):
-            frame = bytes(gameFlow[messageID], 'utf-8')
-            socket.send(frame)
-            messageID = messageID + 1
-
-        # When game starts, in demo we just send message
-        if message == (b"Start|Mode|Difficulty"):
-            frame = bytes(gameFlow[messageID], 'utf-8')
-            socket.send(frame)
-            messageID = messageID + 1
-
-        # Possible Player actions, in demo we do the same as with standart Gotcha
-        if message == (b"0") or message == (b"1") or message == (b"2") or message == (b"3") or message == (b"4"):
-            frame = bytes(gameFlow[messageID], 'utf-8')
-            socket.send(frame)
-            messageID = messageID + 1
-
-
-# Peiramathse opos to vlepeis na tairiaksei, den ksero polla gia to pos trexei, alla trexei
+        # If Someone in Unity made a move, we should update Action and continue
+        if (messageArr[0] == ("0") or messageArr[0] == ("1") or messageArr[0] == ("2") or messageArr[0] == ("3") or messageArr[0] == ("4") or messageArr[0] == ("5")):
+            print("Mpainei sto Player Action")
+            # Assign chosen action
+            action = int(messageArr[0])
+            # Update Action
+            env.step(action)
+            # Getting Next Game State
+            frame = getRequest()
+            socket.send(bytes(frame, encoding='utf8'))
+    
+    # If Game was finished correctly we must send Results
+    if env.is_over():
+        # Wait for message, if server got any message it unfreezes
+        print("-----------------")
+        message = (socket.recv()).decode("utf-8")
+        print ("Unity:", message)
+        messageArr = message.split('|')
+        # Send Results
+        end = env.get_payoffs()
+        message = "End" + '|' + str(end[0]) + '|' + str(end[1])
+        print("Server:", message)
+        socket.send(bytes(message, encoding='utf8'))   
+        # reset environment
+        env.reset()
+        busy = False
